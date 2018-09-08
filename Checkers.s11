@@ -1,0 +1,2424 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;			HW-4 The Checkers Game!!		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+tks = 177560
+tkb = 177562
+tps = 177564
+tpb = 177566
+cls = 177546
+
+.=torg+20				;iot trap vector - will be used to call to printer interrupt
+.word printChr
+.word 200				;priority 4
+
+.=torg +60				;keyboard interrupt vector
+.word getInput
+.word 200				;priority 4
+
+.word printChr			;printer interrupt vector
+.word 200				;priority 4
+
+.=torg+100				;clock interrupt vector
+.word clock
+.word 300				;priority 6
+
+
+.= torg + 4000
+;;;;;;;;;;;;												main program				;;;;;;;;;;;;;;;;;;
+
+main: mov #main,sp		;initializing the stack
+	mov #100,@#tps 		;we enable the print interrupt, and we won't shut it down throughout the prog
+	
+	mov #welcome,-(sp)	;we would like to print the welcome message, using the print buffer
+	mov #100.,-(sp)
+	jsr pc,printStr
+	add #4,sp			;stack restore
+	
+printDlr:	mov #dollarSn,-(sp)	;print the dollar sign to let the user know he recieve input from him
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	tst busyPrnt	;we would like to check if we finished printing before initiating the clock and keyboard interruptions
+	bne .-4
+	clr InputLen		;clear the variable that hold the length of the input
+	clr InptDone		;clear the variable that indicates if we finished recieving input or not
+	mov #101,@#tks		;enable the keyboard to interrupt
+
+StrtSeq: wait			;This is first sequence - we wait for initial input from user
+	tst InptDone		;check if we finished recieving input
+	beq StrtSeq			;if not, keep waiting for input from user
+	
+	mov #0,@#tks		;we wouldn't like to be interrupted by keyboard after recieving input
+	clr InptDone
+	
+	tst -(sp)			;leaving space for analInpt return value
+	jsr pc, analInpt	;we would like to analyze the input we recieved from user
+	tst (sp)+
+	bmi	StrtSeq		;if analInpt returned negative, that means there was a bad input, therefore try to recieve input again
+				
+
+	tst busyPrnt	;we would like to check if we finished printing before continuing to the Game sequence
+	bne .-4
+
+;this is the game sequence, here we'll make a turn, and print relevant data	
+GameSeq:				
+	mov #enterC,-(sp)	;we would like to print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+
+	mov #BoardLO,-(sp)	;we would like to print "Board layout"
+	mov #17.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+		
+	jsr pc, AlterBrd	;create a board that is ready for printing, by using the current board
+	mov #Board2P,-(sp)	;we would like to print the current board
+	mov #82.,-(sp)
+	jsr pc,printStr
+	add #4,sp			;restore the stack
+	
+	jsr pc, CheckWin		;we would like to check if we have a winner before continuing
+	cmp r4,#62				;check if r4 is the the letter '2' - if it is, that means that the winner was printed
+	bne .+6
+	jmp Restart
+	
+	mov #CurPStr,-(sp)	
+	mov #16.,-(sp)
+	jsr pc,printStr		;we print "Current Player: "
+	add #4,sp
+	
+	cmp Player,#1
+	bne printBP			;check if current player is 1=white. if it isn't print "Black "
+	mov #White,-(sp)
+	mov #6,-(sp)
+	jsr pc,printStr		;prints "White "
+	add #4, sp
+	mov #WhitePlr,-(sp)
+	mov WPlrLen,-(sp)
+	jsr pc, printStr	;print Human of Computer, by what argument that the user initialized
+	add #4,sp
+	mov #enterC,-(sp)	;prints double enter
+	mov #4,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	mov #dollarSn,-(sp)	;print the dollar sign
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	br CoHTurn			
+printBP:	mov #Black,-(sp)
+	mov #6,-(sp)
+	jsr pc, printStr	;print "Black "
+	add #4,sp
+	mov #BlackPlr,-(sp)
+	mov BPlrLen,-(sp)
+	jsr pc, printStr	;print Human of Computer, by what argument that the user initialized
+	add #4,sp
+	mov #enterC,-(sp)
+	mov #4,-(sp)
+	jsr pc, printStr
+	add #4, sp
+	mov #dollarSn,-(sp)	;print the dollar sign
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+
+;;here, we'll check who's turn is it - a Human turn or a Computer turn - and branch to the relevant subroutine
+CoHTurn:	tst busyPrnt		;check that we finished printing before initiating the clock and keyboard interrupts	
+	bne CoHTurn
+							;here we would like to check if the current turn is the human's turn, or the cumputer's turn
+	mov #100,@#cls				;enabling the keyboard and clock interrupts
+	clr ClkCount
+	mov #101,@#tks
+	clr InptDone
+	clr InputLen
+	
+	cmp Player,#1
+	bne itsBlack		;we check the player label - if its not 1, its the black player's turn
+	cmpb #'C,WhitePlr
+	bne HumanTurn		;if white player's first char isn't 'C' - that means its now a human Turn
+	jmp TurnComp
+itsBlack: 	cmpb #'C,BlackPlr
+	bne HumanTurn
+	br TurnComp
+
+;;in this branc, we would like to clear the board, and clear all the relevant flags and variables
+;;so that we will be ready to start a new game, if asked to.
+Restart: jsr pc, ClearBrd				;this function will recreate the Board
+	mov #0,ActiveG					;game isn't active anymore
+	mov #0,@#cls					;we disable the clock interrupt
+	mov #1,Player					;because we will always start a game with white player
+	clr TIMEOUTB					;cleaning the flags
+	clr TIMEOUTW
+	clr ClkCount
+	clr RealClk
+	clr CompTurn
+	clr TimeIsUp
+	clr r4
+	jmp printDlr	
+
+;;this branch is the human turn - here we will wait for an input from user,
+;;and we then user finished his command, we will analyze it and do the relevant thing for the command
+;;we will also check if its turn time is up - if it is, we will end the game.
+HumanTurn: tst ActiveG	;its the human's turn, therefore we check the conditions of the flags
+	beq Restart
+	tst TimeIsUp		;check if TimeIsUp
+	bne outOfTime
+	wait
+	tst InptDone		;check if we finished recieving input
+	beq HumanTurn
+	tst -(sp)					;if we got here, that means the user finished typying it's command
+	jsr pc, analInpt
+	tst (sp)+
+	beq HumanTurn		;if we got 0 from the stack, that means that the user asked for "time"
+	bmi .+6
+	jmp NextTurn		;if the user entered a good command, it has been made, therefor prepeare for a new turn
+	br HumanTurn
+	
+;;this branch indicates the actions we will take if the human is out of time in his turn
+outOfTime: mov #0,@#tks		;we would like to shut down interruptions from keyboard
+	cmp Player,#1
+	bne BoutOfT
+	mov #enterC,-(sp)		;prints double enter
+	mov #4,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	mov #White,-(sp)		;print "White "
+	mov #6,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #HoutOfT,-(sp)		;prints " Human is out of...."
+	mov #34.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #enterC,-(sp)		;prints double enter
+	mov #4,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	br Restart
+BoutOfT: mov #Black,-(sp)		;print "Black "
+	mov #6,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #HoutOfT,-(sp)		;prints " Human is out of...."
+	mov #34.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #enterC,-(sp)		;prints double enter
+	mov #4,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	br Restart
+	
+;; this branch is the Compter's turn.
+;;in this branch, we will call the "getMaxWp" function, with iterative deeping, so that
+;;as long as the timeout for its turn hasn't reached yet, we will continue to calculate the best
+;;move for the computer's turn, with more steps each iteration.
+TurnComp:		clr DoDestin
+	clr DoSource
+	clr NumMoves			;we would like to check if the computer has any possible moves
+	mov Player,CurPlayr
+	jsr pc, countMov
+	tst NumMoves
+	beq DoTurn			;if there aren't any possible moves for the computer, we would like to skip its turn
+	inc CompTurn	;its a computer's turn, therefore inc CompTurn
+	mov #1,Steps			;we'll want to start checking the best move, from the first step
+	
+							
+TurnLoop:	tst ActiveG		;check if the game is still active
+	bne .+6
+	jmp Restart				;if it isn't, restart
+	mov #SrcPos, -(sp)
+	mov #DstPos, -(sp)
+	mov #WinParam, -(sp)	;activate the function that will store the bast move in the labels above
+	jsr pc, getMaxWp
+	tst (sp)+
+	tst (sp)+
+	tst (sp)+
+	tst winFlag
+	bne DoWinTurn
+	tst TimeIsUp			;check if we returned from the function because the time is up
+	bne DoTurn				;if we did, the computer need to to its turn
+	add #2,Steps			;inc the Steps by 2
+	mov SrcPos,DoSource		;if we did, we would like to store what the function found
+	mov DstPos,DoDestin	
+	br TurnLoop
+	
+DoWinTurn:	mov SrcPos,DoSource
+	mov DstPos,DoDestin
+	clr winFlag
+DoTurn:	tst ActiveG		;check if the game is still active
+	bne .+6
+	jmp Restart	
+	mov DoSource,-(sp)				;here we'll do the computer's turn
+	mov DoDestin,-(sp)
+	mov #Board,-(sp)
+	jsr pc, movPiece					;make the move
+	add #6,sp				;fix the stack
+	mov #-21.,TempWP		;clear the Temporary WP, and from here we will continue to NextTurn
+
+;;This branch will prepeare everything that is needed to be preapered for a new turn to be made
+NextTurn: 	mov #0,@#cls	;if we want to start a new turn, we should unable the clock
+	mov #0,@#tks			;if we want to start a new turn, we should unable the keyboard until we finished printing everything
+	jsr pc,pTime4Mov		;print the time that this turn took
+	clr CompTurn
+	clr TimeIsUp
+	clr RealClk				;and reset all relevant flags and counters
+	clr ClkCount
+	clr InptDone
+	clr InputLen
+	
+	cmp Player,#1			;if player was white, now it will be black, and vice versa
+	beq .+14					;NextPlrB
+	mov #1,Player
+	jmp GameSeq
+;NextPlrB: 
+	mov #2,Player
+	jmp GameSeq
+	
+;; This branch will check if current player has won. if he did, we'll print he is the winner	
+CheckWin: mov #Board,-(sp)
+	mov Player,-(sp)
+	jsr pc, calcWP				;calculate the WP of current player
+	add #4,sp
+	neg r4						;we would like to recieve the positive value of WP
+	cmp r4,#20
+	beq pWinner
+	rts pc
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+pWinner:	
+	cmp Player,#2
+	bne BlackPWon
+	
+	mov #WP4WP,-(sp)			; print "White player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov r4,r5					;prints the current WP
+	clr r4
+	div #8,r4
+	add #60,r4
+	add #60,r5
+	mov #WPString,r1
+	movb r4,(r1)+
+	movb r5,(r1)
+	mov #WPString,-(sp)
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr r5
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #White,-(sp)			; print "White "
+	mov #6.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #playerWin,-(sp)			; print "player wins!"
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	rts pc
+	
+BlackPWon: mov #WP4BP,-(sp)			; print "Black player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov r4,r5						;print the current WP
+	clr r4
+	div #8,r4
+	add #60,r4
+	add #60,r5
+	mov #WPString,r1
+	movb r4,(r1)+
+	movb r5,(r1)
+	mov #WPString,-(sp)
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr r5
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #Black,-(sp)			; print "Black "
+	mov #6.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #playerWin,-(sp)			; print "player wins!"
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	rts pc
+	
+	
+	
+;;This subroutine acts as a "print buffer" - initializing the parameters required for the printer interrupt,
+;; and reassuring that we won't "print over" something we want to print.
+;before trying to print a string, you need to pass in stack the address of string to print
+;and pass the value of string length
+printStr: tst busyPrnt	;check if we print a string now
+	bgt	printStr		;if we do, wait
+	mov #1,busyPrnt
+	mov 4(sp),pointer
+	mov 2(sp), StrLen
+	iot					;start printing the string by using our trap
+	rts pc
+
+
+;;before printing a string, pointer should hold the address of first char in string (through the "printStr" function)
+;;and StrLen should hold the amount of chars to print. busyPrnt should be 1 if we are in a middle of printing
+;;a string, and 0 if we finished printing the string
+printChr:	tst StrLen		;check if we finished printing
+	ble .+22				;finished printing, branch to clr busyPrnt
+	movb @pointer, @#tpb
+	inc pointer
+	dec StrLen
+	rti
+	clr busyPrnt		;branch here. we finished printing, therefore busyPrnt=0
+	rti
+
+;; this is the keyboard interruption subroutine
+;; will print each char that the user typed, and when user pressed enter, we will know he finished typing
+getInput:
+	mov @#tkb, -(sp)			;if we got a keyboard interruption, that means there is a char ready in tkb. we store it on the stack
+		mov sp,-(sp)			;we would like to print the char that the user clicked 
+		mov #1,-(sp)
+		jsr pc,printStr
+		add #4,sp
+	cmp (sp),#8.				;that means the user wants to backspace
+	beq .+36					;delChar
+	mov #RawInput,-(sp)			;we store the destination of the char on the stack
+	add InputLen,(sp)			;we add the relevant index
+	movb 2(sp),@0(sp)			;we move to char into the input variable
+	tst (sp)+
+	cmp (sp),#13.				;that means the user pressed enter
+	beq fin_inp
+	inc InputLen				;we increase the length of the input by 1
+	br backFInt
+;delChar:						;this means the user want to delete last char
+	tstb @#tps					;check if the printer is avilable
+	bpl .-4
+	mov #40,@#tpb				;print space to delete the char that we printed earlier
+	tstb @#tps
+	bpl .-4
+	mov #8.,@#tpb				;print he backspace again to go back from the space
+	tst InputLen			
+	beq backFInt				;if the user didn't type anything yet, don't do anything
+	dec InputLen				;if the user typed somthing already,we would like to shorten the string length,
+								;so that in the next iteration we will write over the char we backspaced
+	br backFInt
+fin_inp:
+	add #2,sp					;we restore the stack
+	mov #1,InptDone
+	rti							;return from interrupt
+backFInt: add #2,sp				;we restore the stack
+	mov #101, @#tks				;re-activate keyboard
+	rti							;return from interrupt
+		
+	
+;clock interruptor
+;if we reached current user's timeout, we will raise the "TimeIsUp" flag.
+clock: 	inc ClkCount		;inc our counter
+	cmp ClkCount,rate	;if we reached one real second, inc the real clock
+	bne endclk
+	clr ClkCount
+	inc RealClk
+	cmp Player,#1		;we check if current player is white
+	bne .+14				;BlackTout		;if he isn't, he is black
+	cmp RealClk,TIMEOUTW	;if we heavn't reached our timeout, continue with prog
+	bne endclk
+	br 	.+12					;TisUp
+;BlackTout: 
+	cmp RealClk,TIMEOUTB	;if we heavn't reached our timeout, continue with prog
+	bne endclk				;if 
+;TisUp:	
+	inc TimeIsUp			;we raise the "Time is up" flag
+endclk: rti
+
+	
+;;	in this subroutine we will alter the board we want to print, so that it will match the current board
+AlterBrd: mov r0,-(sp)	;r0 will be our Board index
+	mov r1,-(sp)		;r1 will be out Board2P index
+	mov r2, -(sp)		;r2 will be our buffer for square's value
+	mov r4,-(sp)		;r4 and r5 will be used to calc the if r1 is pointing to bytes we shouldn't write to in Board2P, such as \n and \r 		
+	mov r5,-(sp)
+	mov #-2.,r0			;our index is 1 because in Board, we have words as squares, and we are intrested in the lower byte of the word.
+	mov #-1.,r1
+Alt_loop: add #2,r0
+	add #1,r1
+	cmp r0,#128.		;check that we haven't reached the end of the board
+	beq alt_end
+	clr r5
+	clr r4
+	mov r1,r5			;r5 will be a copy of the index of Board2P
+	sub #8.,r5			;we check if r1 is pointing to place 8th or 9th place in line of Board2P
+	sxt r4				;sign extend to r4
+	div #10.,r4			;r5 will now hold the remain
+	cmp #1,r5
+	beq .+6				;Add2toI			;that means r1 is on the 9th square of the line	
+	tst r5
+	bne .+6				;DontAdd2		;that means that r1 is on neither
+;Add2toI:	
+	add #2,r1	;if we got here, that means r1 was on the 8th square, therefore we will inc in 2
+;DontAdd2:	
+	movb Board(r0),r2
+	tst r2
+	beq .+30			;PutSpace		;if our square is 0, we put space
+	cmp r2,#1			;if current square holds '1', that means the white player is there
+	beq .+12			;PutWhite
+;PutBlack: 
+	movb #'B,Board2P(r1)
+	br Alt_loop
+;PutWhite: 
+	movb #'W,Board2P(r1)
+	br Alt_loop
+;PutSpace: 
+	movb #'_,Board2P(r1)
+	br Alt_loop
+alt_end: mov (sp)+,r5	;pop back registers and return
+	mov (sp)+,r4
+	mov (sp)+,r2	
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc
+
+;this function will alter the original board to its initial starting positions
+ClearBrd:							
+	mov r0,-(sp)
+	clr r0
+	dec r0
+	inc r0					;branches back here
+	movb OriginB(r0),Board(r0)
+	cmp r0,#126.
+	bne .-14
+	mov (sp)+,r0
+	rts pc	
+	
+;;This function will print the numbers we send via r1 and r2 - to the printer:
+;;before calling this function, you need to pass the relevent decimal value to be printed via r2, and r1 holds the less then 1 value,
+;; that needs to be printed to the screen. if r5 is negative, we wouldn't like to print ".0"		
+pTimeDec:	mov r0,-(sp)
+	clr r0					;r0 will be our index in the 
+	mov r3,-(sp)			;r3 will help us reverese the string
+	mov r4,-(sp)			;r5 and r4 will help us seperate the number to digits
+	mov r5,-(sp)			
+	clr r4
+	tst r2
+	beq prnt0Dot
+	mov r2,r5
+	dec r0
+BeforeDot: 	inc r0
+	clr r4
+	div #10.,r4				;we divide r4, therefore r3 will hold the remaining, which is the digit we would like to print (from backwords)
+	add #60,r5				;we add the ascii value
+	movb  r5, beforDot(r0)	;and push it to beforDot. later we'll print it from the back, to the start
+	mov r4,r5
+	tst r4					;now we would like to check if we need to continue dividing
+	bne BeforeDot			;if we still have numbers to print, we will continue
+							;first, we would like to reverse the string of nubmers, because it is backwards
+	mov r0,r3				;r3 now holds the amount of digits
+	mov r0,r4				;r4 will be the copy of the index, so we will know where to start printing from
+	tst r0
+	bne print_Loop			;if we need to print more then 1 digit, branch to print_Loop
+	mov #beforDot,-(sp)		;we print the digit
+	mov #1,-(sp)
+	jsr pc, printStr
+	add #4, sp
+	mov (sp)+,r5			;restore r5
+	tst r5					;if r5 is negative, therefore we wouldn't want to print ".", so we skip to the end
+	bmi fin6
+	mov #Dot0str,-(sp)		;now we would like to print a dot - "."
+	inc (sp)
+	mov #1,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	br AfterDot
+print_Loop:	dec r0			;r0 is the index that going backwards
+	inc r3					;and r3 will be the index that going forward
+	movb beforDot(r0),beforDot(r3)		;create a copy of the digits
+	tst r0
+	bne print_Loop			;if r0 is zero, that means we got to the start of the string, therefore the string is ready for printing
+	mov #beforDot,-(sp)
+	add r4,(sp)				;we would ilke to print from the place that the string starts from
+	mov r3,-(sp)			;and we'll print r3-r4 digits
+	dec r4
+	sub r4,(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov (sp)+,r5			;restore r5
+	tst r5					;if r5 is negative, therefore we wouldn't want to print ".", so we skip to the end
+	bmi fin6
+	mov #Dot0str,-(sp)		;now we would like to print a dot - "."
+	inc (sp)
+	mov #1,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	br AfterDot
+prnt0Dot:  mov #Dot0str,-(sp)			;print "0."
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov (sp)+,r5				;restore r5
+AfterDot: mov r1,r3
+	mul #10.,r3					;we multiply the remaining by 10
+	clr r2
+	div rate,r2					;now r2 will hold the  msb of the remaining
+	add #60,r2
+	mov r2, afterDot
+	mov #afterDot,-(sp)
+	mov #1,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+fin6: 						;restore the registers and exit
+	mov (sp)+,r4
+	mov (sp)+,r3
+	mov (sp)+,r0
+	rts pc
+	
+TIMEFUNC: jmp TimeFunc
+STRTFUNC: jmp StrtComm
+STOPFUNC: jmp StopFunc	
+
+;;This function will remove any space in a string that we have in RawInput.
+;;before calling this function, r1 needs to hold the address of the first char we will start from
+;; this function will inc r1 until it holds the address of a non-space char
+;; if we reached the end of a string, r1 will hold -1
+remSpace: mov r0,-(sp)
+	mov #RawInput,r0		
+	add InputLen, r0		;r0 will hold the address of the last char
+remLoop: cmp r0,r1
+	beq .+14				;EndOfStr			;if r1 hold the address of the last char, that means we reached the end of the line, therefore return -1
+	cmpb #40,(r1)			;we check if r1 points to a space char
+	bne .+12				;itsChar				;if its not space, its a char, that means we need to return and continue
+	inc r1					;if it is space, we would like to inc r1 and check again
+	br remLoop
+;EndOfStr: 	
+	mov #-1.,r1
+;itsChar:	
+	mov (sp)+,r0
+	rts pc
+	
+;;	This subroutine will analyze the input that the user entered
+;; it returns -1 via stack if user entered a bad command, returns 0 if it was a "time" or "stop" command, and return 1 if it was "move"
+analInpt:	mov r0,-(sp)
+	mov r1,-(sp)
+	mov r2,-(sp)
+	clr r0
+	clr r1
+	clr r2
+	tst InputLen		;if the user didn't type anything, its a bad command
+	bne .+6
+	jmp BadCmnd
+	mov #RawInput,r1	;r1 will now hold the address of the raw input from user
+	jsr pc,remSpace		;this function will remove the spaces from the string that r1 holds, until it reaches a char that isn't space
+	tst r1
+	bpl .+6
+	jmp BadCmnd
+	cmp ActiveG,#0		;if the game hasn't started yet, player can only command start
+	beq STRTFUNC
+	cmpb #'s,(r1)		;we would like to check if the command start with s
+	beq STOPFUNC		;if it is, it might be a stop command
+	cmpb #'t,(r1)		;we would like to check is the command starts with t
+	beq TIMEFUNC		;if it is, it might be the "time" command
+	cmpb #'m,(r1)		;we would like to check if the command start with m
+	bne badComm			;if it isn't, we are sure it is a bad command.
+						;if the first char is m, it might be the move command
+							
+	;;;;;;;;;;;;;;;;;;;;;;;;;;;			MOVE FUNCTION		;;;;;;;;;;;;;;;;;;;;
+	
+MoveFunc:	inc r1
+	cmpb #'o,(r1)
+	bne badComm
+	inc r1
+	cmpb #'v,(r1)
+	bne badComm
+	inc r1
+	cmpb #'e,(r1)
+	bne badComm
+	inc r1						;if we got here, that means that the user typed "move"
+	tst CompTurn				;if we currently in a computers turn, user can't move his piece
+	bne badComm
+	jsr pc, remSpace			;we would like to remove the spaces
+	tst r1
+	bmi badComm					;if we reached the end of the string, therefore there aren't enough arguments, so its a bad command
+	cmpb (r1),#'0				;check the current char. if its less then '0' or more then '7', it is illegal
+	blt badComm
+	cmpb (r1),#'7
+	bgt badComm
+	movb (r1),r0
+	bic #177760,r0				;r0 now holds the value of the ascii char
+	asl r0
+	asl r0
+	asl r0						;mul r0 by 8
+	mov r0,Helper				;this will be our MSB digit
+	inc r1
+	cmpb (r1),#'0				;check the current char. if its less then '0' or more then '7', it is illegal
+	blt badComm
+	cmpb (r1),#'7
+	bgt badComm
+	movb (r1),r0					
+	bic #177760,r0
+	add Helper,r0				;now r0 holds a legal source index on the board
+	inc r1						
+	
+	jsr pc, remSpace			;we would like to remove the spaces
+	tst r1
+	bmi badComm					;if we reached the end of the string, therefore there aren't enough arguments, so its a bad command
+	cmpb (r1),#'0				;check the current char. if its less then '0' or more then '7', it is illegal
+	blt badComm
+	cmpb (r1),#'7
+	bgt badComm
+	movb (r1),r2
+	bic #177760,r2
+	asl r2
+	asl r2
+	asl r2						;mul r2 by 8
+	mov r2,Helper
+	inc r1
+	cmpb (r1),#'0			;check the current char. if its less then '0' or more then '7', it is illegal
+	blt badComm
+	cmpb (r1),#'7
+	bgt badComm
+	movb (r1),r2					
+	bic #177760,r2
+	add Helper,r2			;r2 now holds a legal destination index on the board
+	inc r1
+	cmpb (r1),#40				;we check if there is a space after the command
+	beq .+12.						;if there is, execute command
+	cmpb (r1),#13.				;we check if there is enter after the command
+	beq .+6
+	jmp BadCmnd					;if there isn't, its a bad command
+	
+	;if we got here, r0 holds the source of the desired move, and r2 holds the destinaion of the desired move. now we would
+	;like to check if we can do the move that the user wanted to do
+	
+	mov r0,r1					;r1 has served its purpose, now we can reuse it for somthing else
+	sub r2,r1					;r1 now holds the delta : Source-Destinaion Index
+	tst r1
+	beq ChkNoMov				;if the delta is zero, we would like to check if current user can move. if it can't, we skip its turn
+	asl r0						;for the next tests, r0 need to hold the place in memory of the stone, therefore 2*index
+	cmp Player,#1
+	bne BlkPMov					;this means that the current player is black, therefore we would like to check if player 2 can make the moves
+								;for the next move tests, we will get the answers through r4 - if r4 is 0 the move cannot be made
+								;r4 will hold 1 if it can move, and r4 will hold 2 if it can eat.
+	tst r1
+	bmi badComm					;if r1 is negative, in a white player turn, that means the user tries to walk back, and it is illegal
+	cmp Board(r0),#1			;check if there is a stone in the place 
+	beq .+6
+	jmp BadCmnd
+	cmp r1,#7.
+	beq .+46					;TryMovR1				;by calculations, if the user want to move right, r1 should be 7
+	cmp r1,#9.
+	beq .+56					;TryMovL1				;by calculations, if the user want to move left, r1 should be 9
+	cmp r1,#14.
+	beq .+66					;TryEatR1
+	cmp r1,#18.
+	bne badComm					;if its neither, it is a bad command
+								;if we got here, that means the user wanted to try to eat left
+	jsr pc, MovL1
+	cmp r4,#2					;if r4 is 2, that means the stone can eat to the left. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+	
+badComm: jmp BadCmnd				;dealing with branching shortage
+
+;TryMovR1:
+	jsr pc, MovR1
+	cmp r4,#1					;if r4 is 1, that means the stone can move to the right. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+;TryMovL1:
+	jsr pc, MovL1
+	cmp r4,#1					;if r4 is 1, that means the stone can move to the left. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+;TryEatR1:
+	jsr pc, MovR1
+	cmp r4,#2					;if r4 is 2, that means the stone can eat to the right. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+MakeMove: asr r0				;we need to divide by 2 the source of the desired move
+	mov r0,-(sp)				;store the source in stack
+	mov r2,-(sp)				;store the destinaion in stack
+	mov #Board,-(sp)			;move the board address via stack
+	jsr pc, movPiece			;make a move
+	add #6,sp
+	mov #1.,8(sp)				;Move 1 via stack to indicate that a move has been made
+	mov (sp)+,r2				;restore registers and exit
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc						;return from MOVE
+								
+
+BlkPMov:	tst r1
+	bpl	badComm					;if r1 is positive, in a black player turn, that means the user tries to walk back, and it is illegal
+	cmp Board(r0),#2			;check if there is a stone in the place 
+	beq .+6
+	jmp BadCmnd
+	cmp r1,#-9.
+	beq .+46					;TryMovR2				;by calculations, if the user want to move right, r1 should be -9
+	cmp r1,#-7.
+	beq .+56					;TryMovL2				;by calculations, if the user want to move left, r1 should be -7
+	cmp r1,#-18.
+	beq .+66					;TryEatR2
+	cmp r1,#-14.
+	beq .+6						;if its neither, it is a bad command
+	jmp BadCmnd
+								;if we got here, that means the user wanted to try to eat left
+	jsr pc, MovL2
+	cmp r4,#2					;if r4 is 2, that means the stone can eat to the left. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+
+;TryMovR2:
+	jsr pc, MovR2
+	cmp r4,#1					;if r4 is 1, that means the stone can move to the right. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+;TryMovL2:
+	jsr pc, MovL2
+	cmp r4,#1					;if r4 is 1, that means the stone can move to the left. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+;TryEatR2:
+	jsr pc, MovR2
+	cmp r4,#2					;if r4 is 2, that means the stone can eat to the right. success! make the move.
+	beq MakeMove
+	jmp BadCmnd
+ChkNoMov:	clr NumMoves
+	mov Player,CurPlayr
+	jsr pc, countMov
+	tst NumMoves
+	beq MakeMove
+	jmp BadCmnd
+
+	;;;;;;;;;;;;;;;;;;;;;;;;;;;			TIME FUNCTION		;;;;;;;;;;;;;;;;;;;;
+TimeFunc: 	inc r1
+	cmpb #'i,(r1)			
+	beq .+6 
+	jmp BadCmnd
+	inc r1
+	cmpb #'m,(r1)
+	beq .+6 
+	jmp BadCmnd
+	inc r1
+	cmpb #'e,(r1)
+	beq .+6 
+	jmp BadCmnd
+	inc r1
+	cmpb (r1),#40				;we check if there is a space after the command
+	beq .+12.						;if there is, execute command
+	cmpb (r1),#13.				;we check if there is enter after the command
+	beq .+6
+	jmp BadCmnd					;if there isn't, its a bad command
+	mov #enterC,-(sp)			;prints double enter
+	mov #4,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	mov #TimeLeft,-(sp)			;prints "Time Left:..."
+	mov #11.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+								;now we need to calc the time left
+	cmp Player,#1				;we check if we are on a white turn or black turn
+	bne pBlackTL				;we print the black player's time left
+	mov TIMEOUTW,r2				;r2 now holds 
+	sub RealClk,r2				; r2 is the remining time in round seconds
+	dec r2
+	mov rate,r1
+	sub ClkCount,r1				;r1 now holds the remaining clock 'ticks'
+	br fin4
+pBlackTL:	mov TIMEOUTB,r2		;r2 now holds 
+	sub RealClk,r2				; r2 is the remining time in round seconds
+	dec r2
+	mov rate,r1
+	sub ClkCount,r1				;r1 now holds the remaining clock 'ticks'
+fin4:	
+	jsr pc, pTimeDec			;print the time left
+	mov #secString,-(sp)		;print " seconds"
+	mov #12.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #dollarSn,-(sp)			;print the dollar sign
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	tst busyPrnt				;before returning back, check we finished printing to string.
+	bne .-4
+	mov #0,8(sp)				;we pass 0 via stack to indicate that the user didn't make a move, just wanted to know the time
+	clr InptDone
+	clr InputLen
+	mov #101,@#tks
+	mov (sp)+,r2				;restore registers and exit
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc
+	
+;This subroutine will print the time that current move took
+pTime4Mov:	mov r1,-(sp)	;we'll use r1 and r2 for the pTimeDec subroutine
+	mov r2,-(sp)
+	mov #enterC,-(sp)			;prints double enter
+	mov #4,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	
+	cmp Player,#1			;check which player currently played
+	bne pBlackT
+	
+	mov #White,-(sp)		;print "White "
+	mov #6,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #WhitePlr,-(sp)		;prints Human/Comp
+	mov WPlrLen,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #MoveTook,-(sp)		;prints "move took "
+	mov #11.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	br pTurnSec
+pBlackT:
+	mov #Black,-(sp)		;print "Black "
+	mov #6,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #BlackPlr,-(sp)		;prints Human/Comp
+	mov BPlrLen,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #MoveTook,-(sp)		;prints " move took"
+	mov #11.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+pTurnSec:	mov RealClk,r2 	;r2 will hold the amount of seconds this turn took
+	mov ClkCount, r1		;r1 will hold the amount of "clock ticks" that aren't a full second
+	jsr pc ,pTimeDec		;will print the time that the turn took
+	mov (sp)+,r2
+	mov (sp)+,r1
+	mov #secString,-(sp)			;prints "seconds" and double enter
+	mov #12.,-(sp)
+	jsr pc, printStr	
+	add #4, sp
+	rts pc
+	
+	;;;;;;;;;;;;;;;;;				START FUNCTION 			;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+STP_FUNC:	jmp StopFunc
+BAD_CMND: 	jmp BadCmnd
+
+
+StrtComm:	cmpb #'s,(r1)		;we would like to check if the command start with s
+	bne BAD_CMND				;if it isn't, its a bad command
+	inc r1
+	cmpb #'t,(r1)				;if the second char isn't 't', therefore it's a bad command
+	bne BAD_CMND
+	inc r1
+	cmpb #'a,(r1)
+	bne BAD_CMND					;if the this char isn't 'a', its a bad command
+	inc r1
+	cmpb #'r,(r1)
+	bne BAD_CMND
+	inc r1
+	cmpb #'t,(r1)
+	bne BAD_CMND
+	inc r1						;if we got here, that means the user typed "start"
+	jsr pc, remSpace			;we would like to get past the spaces
+	tst r1
+	bmi BAD_CMND				;if we reached the end of the command, its a bad command because there are no arguments
+	cmpb #'c,(r1)				;we check who will be the white player, comp or human?
+	beq WhiteIsC
+	cmpb #'h, (r1)				;if its neither, its a bad command
+	bne BAD_CMND
+	mov #WhitePlr,r2			;if we got here, that means the white player is human
+	movb #'H,(r2)+				;we store 'Human' to indicate that the white player is human
+	movb #'u,(r2)+
+	movb #'m,(r2)+
+	movb #'a,(r2)+
+	movb #'n,(r2)
+	mov #5,WPlrLen
+	br alzStrT1
+	
+WhiteIsC:	mov #WhitePlr,r2	;if we got here, that means the white player is Computer
+	movb #'C,(r2)+				;we store 'Computer' to indicate that the white player is computer
+	movb #'o,(r2)+
+	movb #'m,(r2)+
+	movb #'p,(r2)+
+	movb #'u,(r2)+
+	movb #'t,(r2)+
+	movb #'e,(r2)+
+	movb #'r,(r2)
+	mov #8,WPlrLen
+alzStrT1:						;we continue to analyze the data, check Timeout for white player
+	inc r1
+	jsr pc, remSpace			;we would like to remove the spaces
+	tst r1
+	bmi BAD_CMND
+	mov #TIMEOUTW,-(sp)			;before calling str2Tout we should store the timeout to write the timeout to
+	jsr pc, str2Tout
+	tst (sp)+
+	tst TIMEOUTW				;;we would like to check if Timeout is negative
+	bmi BAD_CMND				;if it is, that means that it is a bad command
+	jsr pc, remSpace			;we would like to remove the spaces
+	tst r1
+	bmi BAD_CMND
+	cmpb #'c,(r1)				;we check who will be the black player, comp or human?
+	beq BlackIsC
+	cmpb #'h, (r1)				;if its neither, its a bad command
+	bne BAD_CMND
+	mov #BlackPlr,r2			;if we got here, that means the Black player is Human
+	movb #'H,(r2)+
+	movb #'u,(r2)+
+	movb #'m,(r2)+
+	movb #'a,(r2)+
+	movb #'n,(r2)
+	mov #5,BPlrLen
+	br alzStrT2
+BlackIsC: mov #BlackPlr,r2		;if we got here, that means the Black Players is Computer
+	movb #'C,(r2)+
+	movb #'o,(r2)+
+	movb #'m,(r2)+
+	movb #'p,(r2)+
+	movb #'u,(r2)+
+	movb #'t,(r2)+
+	movb #'e,(r2)+
+	movb #'r,(r2)
+	mov #8,BPlrLen				
+alzStrT2: 						;we continue to analyze the data, check Timeout for black player
+	inc r1
+	jsr pc, remSpace			;we would like to remove the spaces
+	tst r1
+	bpl .+6 
+	jmp BadCmnd
+	mov #TIMEOUTB,-(sp)			;before calling str2Tout we should store the timeout to write the timeout to
+	jsr pc, str2Tout
+	tst (sp)+
+	tst TIMEOUTB
+	bpl .+6 
+	jmp BadCmnd					;if it is, that means that it is a bad command
+	cmpb (r1),#40				;we check if there is a space after the command
+	beq .+12.					;if there is, execute command
+	cmpb (r1),#13.				;we check if there is enter after the command
+	beq .+6						;if there isn't, its a bad command 
+	jmp BadCmnd					;now, if there is any chars after the space cleaning, it should be a bad command
+	mov #1,ActiveG				;if we got here, that means the command is legal, start the game!!!
+	;;;;;;				NOW WE WOULD LIKE TO PRINT ALL THE RELEVANT DATA		;;;;;;;;;;;
+	mov #enterC,-(sp)	;		print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #StartMsg,-(sp)			;print start game message
+	mov #23.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #White,-(sp)			;print "white"
+	mov #6,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	cmpb WhitePlr, #'C			;check if the white player is computer
+	beq PrntComp
+	mov #pIsHuman,-(sp)			;print "Human player..."
+	mov #21.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	br WhiteTime
+PrntComp: mov #pIsComp,-(sp)	;print "Computer player..."
+	mov #24.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+WhiteTime:	mov TIMEOUTW,r2		;before calling pTimeDec, r1 and r2 should hold the amount of clock ticks, divided with rate, 
+	clr r1						;we didn't mul in rate yet, therefore we send it like this
+	dec r5		
+	jsr pc,pTimeDec				;we would like to print the timeout in decimal for white player
+	
+	mov #secPerMv,-(sp)			;print "seconds per move"
+	mov #21.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #Black,-(sp)			;print "black"
+	mov #6,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	cmpb BlackPlr, #'C			;check if the black player is computer
+	bne PrntHumn				;if its not C, its human
+	
+	mov #pIsComp,-(sp)			;print "Computer player..."
+	mov #24.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	br BlackTime
+	
+PrntHumn: mov #pIsHuman,-(sp)			;print "Human player..."
+	mov #21.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+
+BlackTime: mov TIMEOUTB,r2		;before calling pTimeDec, r1 and r2 should hold the amount of clock ticks, divided with rate, 
+	clr r1						;we didn't mul in rate yet, therefore we send it like this
+	jsr pc,pTimeDec				;we would like to print the timeout in decimal for white player
+	mov #secPerMv,-(sp)			;print "seconds per move"
+	mov #21.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	inc r5
+	mov #1,8(sp)				;we pass 1 by stack, because everything went good 					
+	mov (sp)+,r2				;everything relevent for start command has been initialized and printed, we return from analInpt
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc
+	
+;;This function will turn a number represented with chars, into a real number that will be stored in the relevant Timeout.
+;;before calling this function, r1 needs to hold the current address of a char, and the address to where to write the timeout to 
+;;should be passed via stack. the function will calculate the timeout given by user.
+;;if the command had illegal argument, we would return -1 via the timeout address
+str2Tout:mov r0,-(sp)
+	mov r2,-(sp)
+	mov r3,-(sp)
+	clr r0						;r0 will hold the num of digits in the Timeout
+	clr r2						;r2 will help us protect the string
+	clr r3						;r3 will hold the timeout
+ToutLoop:	cmpb (r1),#40		;we would check if we reached a space char - therefore the end of the num
+	beq fin3
+	cmpb (r1), #13.				;we would check if we reached the end of the string - therefore the end of the num
+	beq fin3
+	cmpb (r1),#60				;if the char is less then 60 (the zero char), then it is a bad command
+	blt badTout				
+	cmpb (r1),#71				;if the char is bigger then 71 (the 9 char), then it is a bad command
+	bgt badTout
+	movb (r1),r2				;r2 now holds the char
+	bic #177760,r2				;we would like to clear all the irrelevant bits, to get the real value of the char
+	mul #10.,r3
+	add r2,r3
+	inc r1
+	br ToutLoop
+badTout: mov (sp)+,r3
+	mov (sp)+,r2
+	mov (sp)+,r0
+	mov #-1.,@2(sp)				;if the input was bad, we would return -1 in the Timeout
+	rts pc
+fin3:	mov r3,@8(sp)				;write the timeout into the address that was passed via stack
+	tst r3
+	beq badTout
+	mov (sp)+,r3
+	mov (sp)+,r2
+	mov (sp)+,r0
+	rts pc
+		
+;;;;;;;;;;;;;;;;;;;;;;;;;			BAD COMMAND FUNCTION		;;;;;;;;;;;;;;;;;;;;;;
+BadCmnd: mov #enterC,-(sp)	;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #errMsgA,-(sp)	;print the first part of error msg
+	mov #16.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #RawInput,-(sp)		;print the command that the user tried to enter
+	mov InputLen,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #errMsgB,-(sp)		;print the second part of the error msg, and go down 2 lines
+	mov #5,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	mov #dollarSn,-(sp)	;print the dollar sign
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr InptDone		;turn off the "Input done" flag, because we want to recieve new input
+	clr InputLen		;clear the input length
+	tst busyPrnt		;check we finished printing
+	bne .-4
+	mov #101,@#tks		;enable input from user
+	mov #-1.,8(sp)
+	mov (sp)+,r2		;restore registers and exit
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;			STOP FUNCTION			;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+OTHERPW: jmp OtherPW
+
+StopFunc: inc r1
+	cmpb #'t,(r1)				;if the second char isn't 't', therefore it's a bad command
+	bne BadCmnd
+	inc r1
+	cmpb #'o,(r1)
+	bne BadCmnd
+	inc r1
+	cmpb #'p,(r1)
+	bne BadCmnd
+	inc r1
+	cmpb (r1),#40				;we check if there is a space after the command
+	beq .+8						;if there is, execute command
+	cmpb (r1),#13.				;we check if there is enter after the command
+	bne BadCmnd					;if there isn't, its a bad command
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	dec ActiveG					;game isn't active
+	dec r5						;when we print the WP, we wouldn't like it to be printed with ".0"
+	
+	mov #Board,-(sp)			;preperations for calcWP
+	mov Player,-(sp)
+	jsr pc, calcWP				;now r4 holds the WP of current player
+	add #4,sp
+	
+	tst r4
+	beq printTie				;if r4 is 0, that means its a tie
+	bmi OTHERPW					;if r4 is negative, therefore the other player won
+								;if we got here, that means that the current player has won, and WP is Positive
+	cmp Player,#1
+	bne TisBlkPlW
+								;if we got here, that means the white player won, and we print WP as is
+	mov #WP4WP,-(sp)			; print "White player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov r4,r5						;print the current WP
+	clr r4
+	div #8,r4
+	add #60,r4
+	add #60,r5
+	mov #WPString,r1
+	movb r4,(r1)+
+	movb r5,(r1)
+	mov #WPString,-(sp)
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr r5
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #White,-(sp)			; print "White "
+	mov #6.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #playerWin,-(sp)			; print "player wins!"
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	br fin5
+		
+	
+printTie: cmp Player,#1
+	bne TieWithB					;this means current player is black
+	
+	mov #WP4WP,-(sp)			; print "White player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	tst busyPrnt					;finish printing
+	bne .-4
+	mov #60,@#tpb					;move 0 to printer
+	inc busyPrnt
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #ItsATie,-(sp)			;print "Its a Tie!"
+	mov #22.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	br fin5
+	
+TieWithB: mov #WP4BP,-(sp)			; print "Black player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	tst busyPrnt					;finish printing
+	bne .-4
+	mov #60,@#tpb					;move 0 to printer
+	inc busyPrnt
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #ItsATie,-(sp)			;print "Its a Tie!"
+	mov #22.,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	br fin5
+
+TisBlkPlW:						;if we got here, that means the black player won
+	mov #WP4BP,-(sp)			; print "Black player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov r4,r5						;print the current WP
+	clr r4
+	div #8,r4
+	add #60,r4
+	add #60,r5
+	mov #WPString,r1
+	movb r4,(r1)+
+	movb r5,(r1)
+	mov #WPString,-(sp)
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr r5
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #Black,-(sp)			; print "Black "
+	mov #6.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #playerWin,-(sp)			; print "player wins!"
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	br fin5
+fin5:	mov #enterC,-(sp)
+	mov #4,-(sp)
+	jsr pc, printStr
+	add #4, sp
+	
+	clr r5
+
+	tst busyPrnt					;finish printing
+	bne .-4
+	
+	mov #0,8(sp)				;we pass 0 by stack, because a move wasn't made					
+	mov (sp)+,r2				;everything relevent for stop command has been initialized and printed, we return from analInpt
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc
+	
+OtherPW:						;if we got here, that means that the other player won, and WP is negative
+	cmp Player,#1
+	bne OthWhtPlW
+								;if we got here, that means the other player, which is black, has won, and WP is negative
+	mov #WP4WP,-(sp)			; print "White player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	tst busyPrnt
+	bne .-4
+	mov #55,@#tpb				;send '-' char to printer
+	inc busyPrnt
+	
+	neg r4					;make r4 positive so that we could print it
+	mov r4,r5						;print the current WP
+	clr r4
+	div #8,r4
+	add #60,r4
+	add #60,r5
+	mov #WPString,r1
+	movb r4,(r1)+
+	movb r5,(r1)
+	mov #WPString,-(sp)
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr r5
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #Black,-(sp)			; print "Black "
+	mov #6.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #playerWin,-(sp)			; print "player wins!"
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	jmp fin5
+	
+OthWhtPlW:						;if we got here, that means the other player, which is white, has won, and WP is negative
+	mov #WP4BP,-(sp)			; print "Black player's Wp.."
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	tst busyPrnt
+	bne .-4
+	mov #55,@#tpb				;send '-' char to printer
+	inc busyPrnt
+	
+	neg r4					;make r4 positive so that we could print it
+	mov r4,r5						;print the current WP
+	clr r4
+	div #8,r4
+	add #60,r4
+	add #60,r5
+	mov #WPString,r1
+	movb r4,(r1)+
+	movb r5,(r1)
+	mov #WPString,-(sp)
+	mov #2,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	clr r5
+	
+	mov #enterC,-(sp)			;print double enter
+	mov #4,-(sp)
+	jsr pc,printStr
+	add #4,sp
+	
+	mov #White,-(sp)			; print "White "
+	mov #6.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	mov #playerWin,-(sp)			; print "player wins!"
+	mov #23.,-(sp)
+	jsr pc, printStr
+	add #4,sp
+	
+	jmp fin5
+
+
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  HW2   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+check_player: cmp r1,#1 ;checks which player we need to count
+beq .+4 ;check1
+br check2
+;check1: ;checks if a player 1 is on a legal space
+	cmp r0, #16. ;if we are at the last line, no moves
+	blos loop
+	clr r2
+	mov r0, r3
+	div #16., r2
+	cmp r3, #0 ; check if player is at the leftmost column
+	beq right1 ; if it is, we cannot move left
+;left1: ;adds 1 to NumMoves if we can move left-up with player 1
+	mov r0, r3    
+	sub #18., r3 ;the space that is left-up from the player is -18 bytes from it
+	mov Board(r3), r1
+	cmp r1, #1 ;if in the left-up space there is player 1, we cannot move
+	beq right1 ;check the diagonal right of player 1
+	cmp r1, #2 ;if its player 2, it might be eaten, so we check
+	beq eat1left
+	add #1, NumMoves ; must be empty space, it can move there
+right1: ;adds 1 to NumMoves if we can move right-up with player 1
+	clr r2
+	mov r0,r3
+	sub #14.,r3 
+	div #16., r2 
+	cmp r3,#0  ;check if the player is at the rightmost column
+	beq loop  ; continue looping
+	mov r0,r3
+	sub #14.,r3 ; the space that is right-up from the player is -14 bytes from it
+	mov Board(r3),r1
+	cmp r1, #1
+	beq loop
+	cmp r1, #2
+	beq eat1right
+	add #1,NumMoves
+	br loop
+eat1left: ;checks if player 1 can eat left-up
+	clr r2
+	mov r3,r4 ; r4 is copy of r3 
+	cmp r3, #16.
+	blos right1 ;exit if the player we want to eat is on the last line
+	div #16.,r2
+	cmp r3,#0
+	beq right1 ;exit if the player we want to eat is on the leftmost column
+	sub #18.,r4
+	mov Board(r4),r1
+	cmp r1,#0 ; if the space left-up to the player we want to eat isn't empty, exit
+	bne right1
+	add #1,NumMoves ; the space is empty, we can eat, inc NumMoves
+	br right1
+eat1right: ;checks if player 1 can eat right-up
+	clr r2
+	mov r3,r4
+	cmp r3,#16. ;exit if the player we want to eat is on the last line
+	blos loop
+	sub #14.,r3
+	div #16.,r2
+	cmp r3,#0
+	beq loop ;exit if the player we want to eat is on the rightmost column
+	sub #14.,r4
+	mov Board(r4),r1
+	cmp r1,#0
+	bne loop ;if the space right-up to the player we want to eat isn't empty, exit
+	add #1,NumMoves ; the space is empty, we can eat, inc NumMoves
+	br loop
+countMov: ;counts the amount of moves a given player can do.
+	mov r0,-(sp)
+	mov r1,-(sp)
+	mov r2,-(sp)
+	mov r3,-(sp)
+	mov r4,-(sp)
+	mov r5,-(sp)
+	clr r1
+	clr r2
+	clr r3
+	clr r4
+	clr r5
+	mov #-2,r0 ;because for the first time loop is running we want to start from the 0 index
+loop: add #2,r0  ;main loop, r0 is index, read through board
+	mov Board(r0), r1;
+	cmp r1, CurPlayr
+	beq check_player
+	cmp r0,#126. ;if r0 reaches 126. , its the end of the board, therefore end of program
+	bne loop
+	mov (sp)+,r5
+	mov (sp)+,r4
+	mov (sp)+,r3
+	mov (sp)+,r2
+	mov (sp)+,r1
+	mov (sp)+,r0
+	rts pc
+check2: ; same code for player 2, only that we inc instead of dec  to look at the possible move
+	cmp r0, #110. ;if we are at the last line, no moves
+	bhi loop
+	clr r2
+	mov r0, r3
+	div #16., r2
+	cmp r3, #0 ; check if player is at the leftmost column
+	beq right2 ; if it is, we cannot move left
+;left2: ;checks if player 2 can move left-down
+	mov r0, r3    
+	add #14., r3
+	mov Board(r3), r1
+	cmp r1, #2
+	beq right2
+	cmp r1, #1
+	beq eat2_left
+	add #1, NumMoves
+right2: ;checks if player 2 can move right-down
+	clr r2
+	mov r0,r3
+	sub #14.,r3
+	div #16., r2
+	cmp r3,#0  ;check if the player is at the rightmost column
+	beq loop  ; continue
+	mov r0,r3
+	add #18.,r3
+	mov Board(r3),r1
+	cmp r1, #2
+	beq loop
+	cmp r1, #1
+	beq eat2_right
+	add #1,NumMoves
+	br loop
+eat2_right: ;checks if player 2 can eat right-down player
+	clr r2
+	mov r3,r4
+	cmp r3,#110.
+	bhi loop
+	sub #14.,r3
+	div #16.,r2
+	cmp r3,#0
+	beq loop
+	add #18.,r4
+	mov Board(r4),r1
+	cmp r1,#0
+	bne loop
+	add #1,NumMoves
+	br loop
+eat2_left: ;checks if player 2 can eat left-down player
+	clr r2
+	mov r3,r4 ; r4 is copy of r3 
+	cmp r3, #110.
+	bhi right2 ;if the player we want to eat is in the last line
+	div #16.,r2
+	cmp r3,#0
+	beq right2 ;if the player we want to eat is on the leftmost column
+	add #14.,r4
+	mov Board(r4),r1
+	cmp r1,#0
+	bne right2
+	add #1,NumMoves
+	br right2
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  HW3 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+addP_WP: inc r4			;adds one to r4- num of player's stones in calcWP routine
+	br countWP
+addA_WP: inc r5			;adds one to r5- num of Adversary's stones in calcWP routine
+	br countWP
+chk_win: tst r5			;checks which player won, and assigns values to r4
+	beq r4_Won		;if r5 - num of stones of adversary - is 0, that means player might win
+	tst r4
+	beq r4_Lost
+CALC: 	sub r5,r4 	  	;calculate WP by formula
+	br ret_WP
+r4_Lost: 	mov #-20,r4 	;we got here if Adversary has stones, but player hasn't.
+	br ret_WP	;r4 hold the losing value
+r4_Won:	tst r4 		;we got here if Adversary doesn't have stones
+	beq CALC		;if player doesn't have stones, calculate WP - (will be 0)
+	mov #20,r4  	;if player has stones and Adversary hasn't, r4 hold winning value
+	br ret_WP
+calcWP: 			; calculates the difference between two player's stones
+	mov r0, -(sp) 	; store r0 value beacause we want to use it in the routine, holds board address
+	mov r1, -(sp) 	; r1 will store player value
+	mov 6(sp), r1 	; player's value.
+	mov 8(sp), r0 	; board address
+	mov r2, -(sp) 	; r2 will be index for iteration over board.
+	mov r3, -(sp) 	; r3 will store value of current square in the board
+	mov r5, -(sp) 	; store r5, we will use it to count the Adversary stones
+	clr r2
+	clr r3
+	clr r4
+	clr r5 
+	sub #2,r2
+	sub #2,r0 		;because we add 2 to r0 in the first iteration
+countWP: 			; iterates over board
+	cmp r2,#126. 	; board is over
+	beq chk_win	
+	add #2, r0 		; increment r0 by 2, to point to next square.
+	add #2, r2
+	mov (r0), r3 	; move the value of square in the board
+	tst r3 			; check if 0.
+	beq countWP		; if it is 0 do nothing
+	cmp r3, r1 		; if it is current player add 1 to the player counter (r4). 
+	beq addP_WP	
+	br addA_WP 		; else, add 1 to the adversary counter (r5).
+ret_WP: 			; restore registers, r4 holds the relevant WP
+	mov (sp)+, r5
+	mov (sp)+, r3 
+	mov (sp)+, r2
+	mov (sp)+, r1
+	mov (sp)+, r0  
+	rts pc 
+Win: 	mov (sp)+, r4	;if player 1 won
+	mov #1, 6(sp) 		;we return 1 into the output
+	rts pc
+checkWin:mov r4, -(sp)	;store r4 value, we will use it to get the current WP 
+	mov 6(sp), -(sp)	;making preperations to call calcWP - store board
+	mov 6(sp), -(sp)	; store player we check for
+	jsr pc, calcWP		
+	tst (sp)+			
+	tst (sp)+
+	cmp r4,#20
+	beq Win
+NotWin:					;if we got here, that means Player didn't win
+	mov (sp)+,r4		;restore r4
+	mov #-1,6(sp)		;we return -1 into the output
+	rts pc
+Max: mov #1, r4	;return 1 on r4, we look for max
+	mov (sp)+, r1 ; restore registers
+	mov (sp)+, r0	
+	rts pc
+minOrMax: mov r0, -(sp) ; store r0's value - r0 will keep original player value
+	mov r1, -(sp) ; store r1's value, r1  will keep current player value
+	mov 8(sp), r1  
+	mov @6(sp), r0
+	cmp r1, r0
+	beq Max
+	mov (sp)+, r1
+	mov (sp)+, r0
+	mov #-1, r4 ; we look for min
+	rts pc 
+movPiece: mov r0, -(sp) ; store r0 
+	mov 4(sp), r0 ; r0 holds the board address from stack
+	mov r1, -(sp) 		;store r1, it will hold the source
+	mov 10.(sp),r1
+	mov r2, -(sp) 		;store r2, it will hold the destination
+	mov 10.(sp),r2
+	asl r1			; we would like to multiply the index in 2because the place of the chip is a word
+	asl r2
+	mov r3, -(sp) ; r3 to save the value of the player we want to move
+	mov r4, -(sp)
+	add r1,r0		;r0 hold the place in memory of the stone to mov
+	mov (r0), r3 ; move the value to r3
+	mov #0, (r0) ; the player source is now 0
+	sub r1,r0	
+	add r2,r0	;now r0 holds the place in memory of the destination of the stone
+	mov r3, (r0) ; move the player to the destination
+	mov r2,r4
+	sub r1,r4	;now r4 will hold the delta between dst and src
+	cmp r3,#1	;we check for which player we moved the stone
+	bne checkP2
+;checkP1: 
+	cmp r4, #-20. ;we would like to check if player 1 ate. if he did, that means the delta is -28 or -36
+	bgt reg_back
+remPiece: asr r4		;r4 now holds half the delta from src to dst
+	sub r4,r0			;because r0 holds the des, we would like to go the place in memory of the rival's stone we just ate
+	mov #0,(r0)
+	br reg_back
+checkP2: cmp r4,#20.	;we would like to check if palyer 2 ate. if he did, that means the delta is 28 or 36
+	blt reg_back		; if its less then, that means it didn't eat.
+	br remPiece			;if it did, remove the piece
+reg_back: mov (sp)+, r4
+	mov (sp)+, r3 ; board is updated, restore registers
+	mov (sp)+, r2 
+	mov (sp)+, r1 
+	mov (sp)+, r0
+	rts pc 
+MovR1: mov #0,r4	; checks if stone of player 1 can move
+	mov r1, -(sp)
+	mov r2, -(sp)
+	mov r3, -(sp)
+	mov r5, -(sp)
+	cmp r0, #16. ;if we are at the last line, no moves
+	blos ret_MR1
+	clr r2
+	mov r0, r3
+	sub #14.,r3 
+	div #16., r2 
+	cmp r3,#0  ;check if the player is at the rightmost column
+	beq ret_MR1 ; if it is, we cannot move right
+	clr r2
+	mov r0,r3
+	sub #14.,r3 ; the space that is right-up from the player is -14 bytes from it
+	mov Board(r3),r1
+	cmp r1, #1  ; if its player 1 there, we can't move
+	beq ret_MR1
+	tst r1
+	bne canEat1R
+	mov #1,r4
+ret_MR1: mov (sp)+, r5
+	mov (sp)+,r3
+	mov (sp)+, r2
+	mov (sp)+, r1
+	rts pc
+canEat1R: clr r2	;check if player 1's stone can eat to the right
+	mov r3,r5 ;r5 is a copy of r3, which hold the right-up place from the stone
+	cmp r3,#16. ;exit if the player we want to eat is on the last line
+	blos ret_MR1
+	sub #14.,r3
+	div #16.,r2
+	cmp r3,#0
+	beq ret_MR1 ;exit if the player we want to eat is on the rightmost column
+	sub #14.,r5
+	mov Board(r5),r1
+	cmp r1,#0
+	bne ret_MR1 ;if the space right-up to the player we want to eat isn't empty, exit
+	mov #2, r4 ; the space is empty, we can eat, inc r4 is 2
+	br ret_MR1
+MovL1: mov #0,r4 ; checks if stone of player 1 can move
+	mov r1, -(sp)
+	mov r2, -(sp)
+	mov r3, -(sp)
+	mov r5, -(sp)
+	cmp r0, #16. ;if we are at the last line, no moves
+	blos ret_ML1
+	clr r2
+	mov r0, r3
+	div #16., r2
+	cmp r3, #0 ; check if player is at the leftmost column
+	beq ret_ML1 ; if it is, we cannot move left
+	clr r2
+	mov r0,r3
+	sub #18.,r3 ; the space that is left-up from the player is -18 bytes from it
+	mov Board(r3),r1
+	cmp r1, #1  ; if its player 1 there, we can't move
+	beq ret_ML1
+	tst r1
+	bne canEat1L  ;if r1 isn't empty, try to eat
+	mov #1,r4
+ret_ML1: mov (sp)+, r5
+	mov (sp)+,r3
+	mov (sp)+, r2
+	mov (sp)+, r1
+	rts pc
+canEat1L: clr r2	;check if player 1's stone can eat to the left
+	mov r3,r5 ;r5 is a copy of r3, which hold the left-up place from the stone
+	cmp r3,#16. ;exit if the player we want to eat is on the last line
+	blos ret_ML1
+	sub #18.,r3
+	div #16.,r2
+	cmp r3,#0
+	beq ret_ML1 ;exit if the player we want to eat is on the leftmost column
+	sub #18.,r5
+	mov Board(r5),r1
+	cmp r1,#0
+	bne ret_ML1 ;if the space left-up to the player we want to eat isn't empty, exit
+	mov #2, r4 ; the space is empty, we can eat, r4 holds 2
+	br ret_ML1
+MovR2: mov #0,r4	; checks if stone of player 2 can move
+	mov r1, -(sp)
+	mov r2, -(sp)
+	mov r3, -(sp)
+	mov r5, -(sp)
+	cmp r0, #110. ;if we are at the last line, no moves
+	bhi ret_MR2
+	clr r2
+	mov r0, r3
+	sub #14.,r3 
+	div #16., r2 
+	cmp r3,#0  ;check if the player is at the rightmost column
+	beq ret_MR2 ; if it is, we cannot move right
+	clr r2
+	mov r0,r3
+	add #18.,r3 ; the space that is right-down from the player is +18 bytes from it
+	mov Board(r3),r1
+	cmp r1, #2  ; if its player 2 there, we can't move
+	beq ret_MR2
+	tst r1
+	bne canEat2R
+	mov #1,r4
+ret_MR2: mov (sp)+, r5
+	mov (sp)+,r3
+	mov (sp)+, r2
+	mov (sp)+, r1
+	rts pc
+canEat2R: clr r2	;check if player 2's stone can eat to the right
+	mov r3,r5 ;r5 is a copy of r3, which hold the right-down place from the stone
+	cmp r3,#110. ;exit if the player we want to eat is on the last line
+	bhi ret_MR2
+	sub #14.,r3
+	div #16.,r2
+	cmp r3,#0
+	beq ret_MR2 ;exit if the player we want to eat is on the rightmost column
+	add #18.,r5
+	mov Board(r5),r1
+	cmp r1,#0
+	bne ret_MR2 ;if the space right-down to the player we want to eat isn't empty, exit
+	mov #2, r4 ; the space is empty, we can eat, inc r4 is 2
+	br ret_MR2
+MovL2: mov #0,r4	; checks if stone of player 2 can move
+	mov r1, -(sp)
+	mov r2, -(sp)
+	mov r3, -(sp)
+	mov r5, -(sp)
+	cmp r0, #110. ;if we are at the last line, no moves
+	bhi ret_ML2
+	clr r2
+	mov r0, r3
+	div #16., r2
+	cmp r3, #0 ; check if player is at the leftmost column
+	beq ret_ML2 ; if it is, we cannot move left
+	clr r2
+	mov r0,r3
+	add #14.,r3 ; the space that is left-down from the player is +14 bytes from it
+	mov Board(r3),r1
+	cmp r1, #2  ; if its player 2 there, we can't move
+	beq ret_ML2
+	tst r1
+	bne canEat2L  ;if r1 isn't empty, try to eat
+	mov #1,r4
+ret_ML2: mov (sp)+, r5
+	mov (sp)+,r3
+	mov (sp)+, r2
+	mov (sp)+, r1
+	rts pc
+canEat2L: clr r2	;check if player 2's stone can eat to the left
+	mov r3,r5 ;r5 is a copy of r3, which hold the left-down place from the stone
+	cmp r3,#110. ;exit if the player we want to eat is on the last line
+	bhi ret_ML2
+	div #16.,r2
+	cmp r3,#0
+	beq ret_ML2 ;exit if the player we want to eat is on the leftmost column
+	add #14.,r5
+	mov Board(r5),r1
+	cmp r1,#0
+	bne ret_ML2 ;if the space left-up to the player we want to eat isn't empty, exit
+	mov #2, r4 ; the space is empty, we can eat, r4 holds 2
+	br ret_ML2
+EAT1L:	mov r0,r3
+	sub #36.,r3
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in 			;we return to minmax
+EAT2L: mov r0,r3
+	add #28.,r3
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in			;we return to minmax
+EAT1R:	mov r0,r3
+	sub #28.,r3
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in			;we return to minmax
+EAT2R: mov r0,r3
+	add #36.,r3
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in 			;we return to minmax
+chkMoveL: cmp r1, #1	;calls to the relevant action move to left function
+	beq L1
+	jsr pc,MovL2    ;if we need to move player2's stone 
+	cmp r4,#2       ;if we can eat, eat
+	beq EAT2L
+	cmp r4, #1      ;if we can move it, move
+	beq MOV2L
+	br chkMoveR		;if we can't neiter, we try to check possible moves to the right
+	L1: jsr pc,MovL1 ; if we need to move player1's stone
+	cmp r4,#2
+	beq EAT1L		;if we can eat, we eat
+	cmp r4, #1
+	beq MOV1L		;if we can move, we move
+	br chkMoveR		;if we can't neiter, we try to check possible moves to the right
+chkMoveR: cmp r1, #1	;calls to the relevant action move to right function
+	beq R1
+	jsr pc,MovR2    ;if we need to move player2's stone 
+	cmp r4,#2       ;if we can eat, eat
+	beq EAT2R
+	cmp r4, #1      ;if we can move it, move
+	beq MOV2R
+	mov #0,lastMove	;we can't move with this stone anymore, therefore last move=0
+	jmp mainLoop		;if we can't neiter, we return to minmax, with no moves done
+	R1: jsr pc,MovR1 ; if we need to move player1's stone
+	cmp r4,#2
+	beq EAT1R		;if we can eat, we eat
+	cmp r4, #1
+	beq MOV1R		;if we can move, we move
+	mov #0,lastMove	;we can't move with this stone anymore, therefore last move=0
+	jmp mainLoop		;if we can't neiter, we return to minmax, with no moves done
+MOV1L: mov r0,r3
+	sub #18.,r3			;r3 now holds our destination
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in 			;we return to minmax
+MOV2L:	mov r0,r3
+	add #14.,r3			;r3 now holds our destination
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in 			;we return to minmax
+MOV1R: mov r0,r3
+	sub #14.,r3			;r3 now holds our destination
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in 			;we return to minmax
+MOV2R: mov r0,r3
+	add #18.,r3			;r3 now holds our destination
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	asr r0
+	asr r3
+	mov r0,-(sp)
+	mov r3,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r0
+	asl r3
+	tst (sp)+
+	mov r0,10.(sp)			;we save the source on the stack
+	mov r3, 8.(sp)		;we save the destinaion on the stack
+	jmp step_in 			;we return to minmax
+winOrLos:mov Player,r4	;r4 holds the value of the player we want to check for
+	cmp r1,r4		;r1 holds the value of current player
+	beq mainLoop   	;if we currently check the Player, that means that last turn was the Adversary, therefore cannot win, iterate over the board
+	tst -(sp)		; preperations for checkWin function
+	mov #Board, -(sp)	
+	mov r4, -(sp)		
+	jsr pc,checkWin	
+	mov 4(sp),r4 		;checkWin will return its answer through the stack
+	tst (sp)+
+	tst (sp)+
+	tst (sp)+
+	tst r4			;now r4 holds 1 if player won, and holds -1 if not
+	bmi mainLoop	;if it didn't win yet, start iterating over the board
+WON:mov #1,winFlag
+	jmp retLastM	;because its the end of the recursion depth
+BackFSon: jmp backFSon
+BackNRes: jmp retLastM
+HandleInp:	clr InptDone	;clear the input flag
+	tst -(sp)
+	jsr pc,analInpt			;analyze the input we recieved
+	tst (sp)+
+	tst ActiveG				;if the game isn't active anymore, go back and restore the board
+	beq BackNRes		
+	br minmax				;if its still active, the means the user asked for the time, continue with minmax
+jump_in:mov #0,r0	;because there isn't last source to start from, 0 will be our next index 
+	jsr pc,minmax
+	tst (sp)+	;now we got back from the son, therefore we need to start at the end of the father
+	tst (sp)+
+	tst (sp)+
+	tst (sp)+
+	tst (sp)+
+minmax:tst TimeIsUp	;we would like to check if the time is up
+	bne BackNRes		;if time is up, we would like to exit as fast as possible
+	tst ActiveG
+	beq BackNRes
+	tst InptDone
+	bne HandleInp
+	mov winFlag,r5	;we would like to check if player won
+	tst r5			;if he did, we would like to continue back in the recursion
+	bne BackNRes
+	mov CurSteps, r2	;r2 holds number of steps to make
+	tst r2			;if steps to take is 0
+	beq BackFSon	;this means we reached the bottom of the recursion
+	mov CurPlayr, r1;r1 holds the value of current player
+	sub #2,r0		;because we add 2 in first iteration of mainLoop
+	br winOrLos		;check if in this situation, Player won
+mainLoop:add #2,r0
+	mov Board(r0),r3 ;iterate over current board
+	cmp r0,#126.	; if we reached the end of the board, and there were no moves to make
+	beq no_moves	; that means we need to go step in for the other player in recursion one step
+	cmp r1,r3		; check if the current stone is the stone of our current player
+	bne mainLoop  	;if the current stone isn't the stone of our current player, continue iterating
+	cmp lastMove,#1	;lastMove holds which move we did last.
+	blo ChkMoveL 	;if its 0, which means its a new stone: check if we can move the current stone to the left. if can't, try to move it to the right
+	beq ChkMoveR	;if its 1, which means it moved to the left already, so try to move it to the right
+	mov #0,lastMove	;if its 2, which means it moved to left and righ already, we'll want to check a new stone
+	br mainLoop
+ChkMoveL:jmp chkMoveL
+ChkMoveR:jmp chkMoveR
+step_in:mov CurPlayr,r1	;r1 holds the current player
+	mov r1,-(sp)	;preperations for minOrMax function
+	mov #Player,-(sp)
+	jsr pc, minOrMax	
+	tst (sp)+
+	tst (sp)+
+	mov #0,-(sp)	;we prepare the stack for the next iteration
+	mov #0,-(sp)
+	mov #0,-(sp)
+	mov #0,-(sp)
+	mov #0,-(sp)
+	cmp r4,#1	;if we need minimum, r4 is -1,if we need maximum,r4 is 1
+	beq WP_MIN
+;WP_MAX:
+	mov #-21.,4(sp)
+	br PUSH1
+WP_MIN:
+	mov #21.,4(sp)
+PUSH1:mov CurSteps,r2	;r2 holds the steps we had in this time
+	sub #1,r2		;steps -1
+	mov r2, CurSteps	;push new steps to make in next iteration
+	mov #0,lastMove	;its a new son, therefore no last move was done.
+	cmp r1,#1		;we check if our current player is player 1
+	beq push2		;if it is, we need to push player 2 as the next current player
+;push1:
+	mov #1,CurPlayr	;we pushed player 1 as the next curret player
+	br jump_in
+push2:
+	mov #2,CurPlayr	;we pushed player 2 as the next current player
+	br jump_in
+no_moves:clr NumMoves
+	jsr pc,countMov	;count the possible moves that current player can do
+	mov NumMoves,r1	;r1 now holds the number of possible moves for current player
+	tst r1
+	beq .+4			;in_nMov		; if r1 is 0, therefore we don't have any possible moves for the current player, so we skip its turn
+out_nMov:br go_back
+;in_nMov:
+	mov r0,-(sp)	;because we didn't make any change, and we need to store the source and destination of a stone we moved,
+	mov r0,-(sp)	;	then we store twice the same index, so no change is done
+	mov CurPlayr,r1	;r1 holds the current player
+	mov r1,-(sp)	;preperations for minOrMax function
+	mov #Player,-(sp)
+	jsr pc, minOrMax	
+	tst (sp)+
+	tst (sp)+
+	cmp r4,#1	;if we need minimum, r4 is -1,if we need maximux,r4 is 1
+	bne .+10	;WP_MIN2
+;WP_MAX2:
+	mov #-21.,-(sp)
+	br .+6			;PUSH2
+;WP_MIN2:
+	mov #21.,-(sp)
+
+;PUSH2:
+	mov CurSteps,r2
+	sub #1,r2		;steps -1
+	mov r2,CurSteps	;push new steps to make in next iteration
+	cmp r1,#1		;we check if our current player is player 1
+	beq pushP2		;if it is, we need to push player 2 as the next current player
+pushP1:mov #1,CurPlayr	;we pushed player 1 as the next curret player
+	jmp jump_in
+pushP2:mov #2,CurPlayr	;we pushed player 2 as the next current player
+	jmp jump_in
+backFSon:mov CurPlayr,r1	;r1 now holds the current son's player
+	mov r1, -(sp)	;preperations for minOrMax function
+	mov #Player, -(sp)
+	jsr pc,minOrMax	;now r4 holds 1 if we look for maximum, and -1 if we look for minimum
+	tst (sp)+
+	tst (sp)+
+	tst r4
+	bpl minS		;if r4 is negative, which means the son is the adverasry, we will store the maximum
+maxS:mov Player,r1	;r1 now holds the player we check for
+	mov #Board,-(sp)	;preperations for WP
+	mov r1,-(sp)		
+	jsr pc,calcWP
+	tst (sp)+
+	tst (sp)+
+	cmp r4,18.(sp)	;r4 holds the current son's WP
+	bgt switch		;if WP of current son is bigger then other sons, save it
+	br retLastM
+minS:mov Player,r1	;r1 now holds the player we check for
+	mov #Board,-(sp)	;preperations for WP
+	mov r1,-(sp)
+	jsr pc,calcWP
+	tst (sp)+
+	tst (sp)+
+	cmp r4,18.(sp)
+	blt switch		;if the current WP is lower then previouse sons, save it
+	br retLastM	
+switch:mov r4,18.(sp)	;hold the new WP 
+	mov 22.(sp),16.(sp)	;we would like to record the src of the move that gave us the relevant WP`
+	mov 20.(sp),14.(sp)		;we would like to record the dst of the move that gave us the relevant WP
+	cmp r4,#20
+	bne .+6
+	jmp WON
+	br retLastM		;return the last move we made
+go_back:cmp CurSteps,Steps
+	beq BackFWin
+	mov CurPlayr,r1	;r1 now holds the current son's player of the father
+	mov r1, -(sp)	;preperations for minOrMax function
+	mov #Player, -(sp)
+	jsr pc,minOrMax	;now r4 holds 1 if we look for maximum, and -1 if we look for minimum
+	tst (sp)+
+	tst (sp)+
+	tst r4
+	bpl min			;if r4 is positive, that means the current player is looking for maximum. there for its father is looking for minimum
+max:mov 6(sp),r4	;now r4 hold the relevant WP of its sons
+	cmp r4, 18.(sp)	; compare the maximal\minimal WP of current father, with the WP of its father
+	bgt SWAP		; if current WP if bigger then father's, current WP is now the father's WP
+	br retLastM
+min:mov 6(sp),r4	;now r4 hold the current min or max of its sons
+	cmp r4, 18.(sp)	; compare the current board's WP with the WP of the fater
+	blt SWAP		; if current WP if bigger then father's, current WP is now the father's WP
+	br retLastM
+SWAP:mov r4, 18.(sp)	; we would like to hold the relevant WP in the father's WP 
+	mov 22.(sp),16.(sp)	;we would like to record the src of the father's move that gave us the relevant WP`
+	mov 20.(sp),14.(sp)		;we would like to record the dst of the father's move that gave us the relevant WP
+	br retLastM
+BackFWin:rts pc
+retLastM:mov 22.(sp),r1	;r1 now holds the source
+	mov r1,r0		;r0 will be where we'll continue iterating from when we return 
+	mov 20.(sp),r2	;r2 now holds the destination
+	asr r2
+	asr r1
+	mov r2,-(sp)	;preperations for movPiece
+	mov r1,-(sp)
+	mov #Board,-(sp)     ;before calling the function, we need to store the label of the board
+	jsr pc, movPiece	;go to function that moves stone from source to destinaion
+	add #6,sp
+	asl r2
+	asl r1
+	sub r1,r2		;destination - source. 
+	tst r2			;r2 now holds the delta
+	beq ret_MM0		;if r2 is 0, which means no moves were done, return
+	bpl P2Moved		;if the sub is positive, which means player 2 moved
+;P1moved:
+	mov #1,CurPlayr	;therefore, now player 1 should play
+	cmp r2,#-20.	
+	bgt .+54		;P1NoEat		;if player 1 eaten, the delta can only be smaller then -20
+;P1Ate:
+	cmp r2,#-30.	
+	blt .+24		;P1AteL		;if player 1 ate to the left, the delta is -36
+;P1AteR:
+	mov #2,lastMove
+	sub #14.,r1		;source-14= where player2 was eaten
+	mov #2,Board(r1);put player2's stone back
+	br ret_MM
+;P1AteL:
+	mov #1,lastMove
+	sub #18.,r1		;source-18= where player2 was eaten
+	mov #2,Board(r1);put player2's stone back
+	br ret_MM
+;P1NoEat:
+	cmp r2,#-16.	
+	blt .+12		;P1MovdL		;if delta is lower then -16, that means p1 moved to left
+;P1MovdR:
+	mov #2,lastMove	;update lastMove 
+	br ret_MM
+;P1MovdL:
+	mov #1,lastMove
+	br ret_MM
+P2Moved:
+	mov #2,CurPlayr	;therefore now player 2 should play
+	cmp r2,#20.
+	blt .+54		;P2NoEat		;because the distance from des to src if p2 ate, is bigger then 18
+;P2Ate:	
+	cmp r2,#30.		;if we got here, that means the p2 ate last turn
+	blt .+24		;P2AteL		;because the distance from des to src if p2 ate left is 28
+;P2AteR:	
+	mov #2,lastMove	;if we got here, that means that p2 ate to right (36)
+	add #18.,r1		;source+18= where player1 was eaten
+	mov #1,Board(r1); put the stone back
+	br ret_MM
+;P2AteL:
+	mov #1,lastMove	;if we got here, that means the p2 ate to left (28)
+	add #14.,r1		;source+14= where player1 was eaten
+	mov #1,Board(r1); put the stone back
+	br ret_MM
+;P2NoEat:	
+	cmp r2,#16.			;if we got here, that means that p1 didn't eat
+	blt .+12		;P2MovdL		;if delta is lower then 16, that means p2 moved to left
+;P2MovdR:
+	mov #2,lastMove	;update lastMove	;if we got here, that means that p1 moved right (18)
+	br ret_MM
+;P2MovdL:
+	mov #1,lastMove	;if we got here, that means the p1 moved left (14)
+	br ret_MM	
+ret_MM0:mov #0,lastMove		;if we didn't return any moves back, check if you can move anywhere
+ret_MM:	mov CurSteps,r2
+	inc r2
+	mov r2,CurSteps
+	rts pc
+getMaxWp:clr r0 				;r0 will be our index on the board
+	mov Player,CurPlayr
+	mov Steps,CurSteps
+	mov #0,-(sp)			;we clear those so the stack will cohorent with algorithm
+	mov #0,-(sp)
+	mov #0,-(sp)			;this will be the src of a mov
+	mov #0,-(sp)			;this will be the dst of a mov
+	mov #-21.,-(sp)			;starting value of WP
+	mov #0,-(sp)			;this willl be the best src
+	mov #0,-(sp)			;this will be the best dst
+	jsr pc, minmax
+	mov winFlag,r5		;we would like to check if player won
+	tst r5
+	bne PlayrWon		; if he did, we need to store 20 in WP
+	mov (sp)+,r0
+	asr r0					;we divide by 2 because we saved on stack the index mul by 2 for word
+	mov r0,@16.(sp)			;mov best dst			
+	mov (sp)+,r0
+	asr r0					;we divide by 2 because we saved on stack the index mul by 2 for word
+	mov r0, @16.(sp)		;mov best src
+	mov (sp)+,@10.(sp)		;mov the relevant WP
+	tst (sp)+
+	tst (sp)+
+	tst (sp)+
+	tst (sp)+
+	rts pc
+PlayrWon:tst (sp)+
+	tst (sp)+
+	tst (sp)+
+	mov (sp)+,r0		;store the last dst of move that brought victory
+	asr r0
+	mov r0,@10.(sp)		
+	mov (sp)+,r0		;store the last src of move that brought victory
+	asr r0
+	mov r0,@10.(sp)
+	tst (sp)+
+	tst (sp)+
+	mov #20,@2(sp)		;store 20 for a win
+	rts pc
+	
+	. = torg + 21000
+	
+CurPlayr: .word 1		;This word will hold the current player we play with
+CurSteps: .word 0
+winFlag: .word 0
+lastMove: .word 0
+NumMoves: .word 0		;This will hold the number of moves a given player can have
+OriginB:.word 0, 2, 0, 2, 0, 2, 0, 2	;original game board
+		.word 2, 0, 2, 0, 2, 0, 2, 0
+		.word 0, 2, 0, 2, 0, 2, 0, 2
+		.word 0, 0, 0, 0, 0, 0, 0, 0
+		.word 0, 0, 0, 0, 0, 0, 0, 0
+		.word 1, 0, 1, 0, 1, 0, 1, 0
+		.word 0, 1, 0, 1, 0, 1, 0, 1
+		.word 1, 0, 1, 0, 1, 0, 1, 0
+		
+Board: 	.word 0, 2, 0, 2, 0, 2, 0, 2	;game board
+		.word 2, 0, 2, 0, 2, 0, 2, 0
+		.word 0, 2, 0, 2, 0, 2, 0, 2
+		.word 0, 0, 0, 0, 0, 0, 0, 0
+		.word 0, 0, 0, 0, 0, 0, 0, 0
+		.word 1, 0, 1, 0, 1, 0, 1, 0
+		.word 0, 1, 0, 1, 0, 1, 0, 1
+		.word 1, 0, 1, 0, 1, 0, 1, 0
+;;;;		Veriables and Flags	;;;;;
+
+pointer:	.word 0				;pointer to a string to print
+StrLen:		.word 0				;indicates the length of a string to print
+InptDone:	.word 0				;indicates that we finished recieving input 
+ClkCount: 	.word 0				;a counter for clock
+RealClk:	.word 0				;will be a real indicator for how much time has passed
+TimeIsUp:	.word 0 			;indicates that the time is up for the current turn
+busyPrnt:	.word 0				;busy printing flag - 1 if printer is still printing a string, 0 if its avilable			
+WhitePlr:	.blkw 5				;this will indicate if the white player is computer or human
+WPlrLen:	.word 0				;this will indicate the length of the white player's string
+BlackPlr:	.blkw 5				;this will indicate if the black player is computer or human
+BPlrLen:	.word 0				;this will indicate the length of the black player's string
+ActiveG:	.word 0				;this flag will indicate if a game has started or not
+RawInput:	.blkw 28.			;raw input from user ,with spaces
+InputLen:	.word 0 			;indicates the length of a input that we recieve from user
+TIMEOUTW: 	.blkw 5				;Time out that the user inserted for white player
+TIMEOUTB:	.blkw 5				;Time out that the user inserted for black player
+beforDot:	.blkw 2				;the time that is above the dot will be saved here
+afterDot:	.blkw 2				;the time that is less then dot will be saved here
+OverFlag:	.word 0				;this flag indicates that the game is over
+Helper:		.word 0 			;a global veriable ment for helping with calculations
+CompTurn:	.word 0 			;indicates that its computer's turn
+DoSource:	.word 0 			;this variable holds the source of the move that the computer want to do
+DoDestin:	.word 0				;this variable hodls the destinaion of the move that the computer wants to do
+TempWP:		.word -21.				;will hold the temporary WP for best move
+WPString:	.word 0				;will hold the WP as string
+
+;;			Messages to print		;;
+welcome:	.ascii<Welcome to 205685795 and 205808157 checkers game!\n\rGood luck, and may the odds be in your favor.\n\r\n\r> 
+			.even	;length is 100
+errMsgA:	.ascii<Cannot execute ">
+			.even	;length is 16
+errMsgB:	.ascii<"\n\r\n\r>
+			.even	;length is 5
+StartMsg:	.ascii<Starting a new game\n\r\n\r>
+			.even 	;length is 23
+pIsHuman:   .ascii<player is Human with >
+			.even   ;length is 22
+pIsComp:	.ascii<player is Computer with >
+			.even 	;length is 25
+White:		.ascii<White >
+			.even   ;length is 6
+Black:		.ascii<Black >
+			.even   ;length is 6
+secPerMv:	.ascii< seconds per move\n\r\n\r>
+			.even 	;length is 21
+enterC:		.ascii<\r\n\r\n>	;these numbers are ascii code for "CR" and "LF" - required to print enter
+			.even	;len = 2
+dollarSn:	.ascii<$ >			
+			.even	;len = 2
+Dot0str:	.ascii<0.>
+			.even 	;length is 2
+BoardLO:	.ascii<Board layout:\n\r\n\r>
+			.even 	;length is 17
+CurPStr:	.ascii<Current Player: >
+			.even	;length is 16
+HoutOfT:	.ascii<Human is out of time. Game Over.\n\r>
+			.even 	;legth is 34
+TimeLeft:	.ascii<Time left: >
+			.even	;length 11
+secString:	.ascii< seconds\n\r\n\r>
+			.even	;length is 12
+WP4WP:		.ascii<WP for white player is >
+			.even	; length is 23
+WP4BP:		.ascii<WP for black player is >
+			.even	; length is 23
+playerWin:	.ascii<player wins! Game over.>
+			.even	; length is 23
+ItsATie:	.ascii<It's a tie! Game over.>
+			.even	; length is 22
+MoveTook:	.ascii< move took >
+			.even	; length is 11
+Board2P:	.ascii<________\n\r>			;game board that we will print
+			.ascii<________\n\r>			;length - 82. (64 squares + 18 Line feed chars)
+			.ascii<________\n\r>
+			.ascii<________\n\r>
+			.ascii<________\n\r>
+			.ascii<________\n\r>
+			.ascii<________\n\r>
+			.ascii<________\n\r\n\r>
+			
+;;			Global Variables	;;
+Player:		.word 1			;we initiate Player to "1" because the white player is always the first to play
+Steps:	.word 1
+SrcPos:	.word 0
+DstPos:	.word 0
+WinParam:	.word 0
+.	=	torg +30000	
+rate:	.word	1000.
+	
